@@ -1,11 +1,10 @@
 import argparse
-import os
 import shutil
-import subprocess
 import sys
 import logging
 import pathlib
-import tempfile
+import requests
+from typing import Optional
 
 
 logging.basicConfig(
@@ -23,15 +22,16 @@ class CLIGenerator:
     _tmp_dir: pathlib.Path
 
     name: str
-    specification: str
+    specification_url: str
     package: str
 
-    def __init__(self):
-        parser = self._get_parser()
-        args = parser.parse_args()
+    def __init__(self, args: Optional[argparse.Namespace] = None):
+        if args is None:
+            parser = self._get_parser()
+            args = parser.parse_args()
 
         self.name: str = args.name
-        self.specification: str = args.specification
+        self.specification_url: str = args.specification
         self.package = self.name.replace("-", "_")
 
         self._build_dir: pathlib.Path = (
@@ -44,12 +44,10 @@ class CLIGenerator:
 
     def run(self):
         self._ensure_directories()
-        self._pull_container()
-        self._run_container()
+        self._download_specification()
+        self._generate_pyproject_toml()
         self._generate_init_py()
         self._generate_about_py()
-        self._generate_pyproject_toml()
-        self._extract_generated_library()
 
     def _get_parser(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
@@ -89,52 +87,6 @@ class CLIGenerator:
         shutil.rmtree(self._tmp_dir.absolute(), ignore_errors=True)
         self._tmp_dir.mkdir()
 
-    def _pull_container(self) -> None:
-        log.info("fetching container image")
-        cmd_fetch: subprocess.CompletedProcess = subprocess.run(
-            ["podman", "pull", "docker.io/swaggerapi/swagger-codegen-cli"],
-            capture_output=True,
-        )
-        if cmd_fetch.returncode != 0:
-            log.critical(
-                "could not pull container image\n"
-                + "stdout:\n"
-                + cmd_fetch.stdout.decode("utf-8")
-                + "stderr:\n"
-                + cmd_fetch.stderr.decode("utf-8")
-            )
-            sys.exit(1)
-
-    def _run_container(self) -> None:
-        log.info("generating the library from API specification")
-        cmd_gen: subprocess.CompletedProcess = subprocess.run(
-            [
-                "podman",
-                "run",
-                "--rm",
-                "-v",
-                f"{self._tmp_dir.absolute()!s}:/local/out/py",
-                "swaggerapi/swagger-codegen-cli:latest",
-                "generate",
-                "-i",
-                self.specification,
-                "-l",
-                "python",
-                "-o",
-                "/local/out/py",
-            ],
-            capture_output=True,
-        )
-        if cmd_gen.returncode != 0:
-            log.critical(
-                "could not generate the library\n"
-                + "stdout:\n"
-                + cmd_gen.stdout.decode("utf-8")
-                + "stderr:\n"
-                + cmd_gen.stderr.decode("utf-8")
-            )
-            sys.exit(1)
-
     def _generate_init_py(self):
         log.info("generating __init__.py")
         with (self._package_dir / "__init__.py").open("w") as f:
@@ -147,25 +99,12 @@ class CLIGenerator:
                 [
                     # TODO Include the API version in the field
                     "VERSION = '0.0.0+0.0.0'\n",
+                    f"SPECIFICATION = {self.specification!s}\n",
                 ]
             )
 
     def _generate_pyproject_toml(self):
         log.info("generating pyproject.toml")
-
-        requirements: list[str] = []
-        if (reqs := (self._tmp_dir / "requirements.txt")).exists():
-            with reqs.open("r") as f:
-                requirements = [
-                    f"\t'{requirement.strip()}',\n" for requirement in f.readlines()
-                ]
-        test_requirements: list[str] = []
-        if (reqs := (self._tmp_dir / "test-requirements.txt")).exists():
-            with reqs.open("r") as f:
-                test_requirements = [
-                    f"\t'{requirement.strip()}',\n" for requirement in f.readlines()
-                ]
-
         with (self._build_dir / "pyproject.toml").open("w") as f:
             f.writelines(
                 [
@@ -180,13 +119,11 @@ class CLIGenerator:
                     "license = { text = 'MIT' }\n",
                     "dynamic = ['version']\n",
                     "dependencies = [\n",
-                    *requirements,
                     "]\n",
                     "requires-python = '>=3.9'\n",
                     "\n",
                     "[project.optional-dependencies]\n",
                     "test = [\n",
-                    *test_requirements,
                     "]\n",
                     "\n",
                     "[project.scripts]\n",
@@ -197,21 +134,18 @@ class CLIGenerator:
                 ]
             )
 
-    def _extract_generated_library(self):
-        log.info("copying autogenerated library code")
-        shutil.move(self._tmp_dir / "swagger_client", self._package_dir)
-        os.rename(self._package_dir / "swagger_client", self._package_dir / "auto")
+    def _download_specification(self) -> None:
+        log.info("downloading API specification")
+        req = requests.get(self.specification_url)
+        if req.status_code != 200:
+            log.critical(f"got status code {req.status_code}")
+            sys.exit(1)
 
-        log.debug("fixing import statements")
-        for file in (self._package_dir / "auto").glob("**/*.py"):
-            with file.open("r") as f:
-                lines = f.readlines()
-
-            with file.open("w") as f:
-                for line in lines:
-                    if "swagger_client" in line:
-                        line = line.replace("swagger_client", f"{self.package}.auto")
-                    f.write(line)
+        try:
+            self.specification = req.json()
+        except Exception as exc:
+            log.critical(f"could not parse JSON: {exc}", exc_info=True)
+            sys.exit(1)
 
 
 def main():

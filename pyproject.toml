@@ -11,7 +11,9 @@ description = "A CLI autogeneration tool using OpenAPI blueprints"
 readme = "README.md"
 keywords = ["OpenAPI", "Swagger"]
 license = {text = "MIT"}
-dependencies = []
+dependencies = [
+    "requests",
+]
 dynamic = ["version"]
 requires-python = ">=3.9"
 
