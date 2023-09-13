@@ -99,6 +99,7 @@ class CLIGenerator:
                 [
                     # TODO Include the API version in the field
                     "VERSION = '0.0.0+0.0.0'\n",
+                    f"SPECIFICATION_URL = '{self.specification_url}'\n"
                     f"SPECIFICATION = {self.specification!s}\n",
                 ]
             )
