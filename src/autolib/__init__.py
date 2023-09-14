@@ -21,20 +21,7 @@ class _Section(enum.IntFlag):
     HEADER_VALUE = enum.auto()
     QUERY_KEY = enum.auto()
     QUERY_VALUE = enum.auto()
-    PAYLOAD = enum.auto()
-
-
-class _Completion(enum.IntEnum):
-    COMPLETE = enum.auto()
-    """Completion is already done."""
-    CONTINUATION = enum.auto()
-    """The word can continue as..."""
-    OPTIONS = enum.auto()
-    """Next words may be..."""
-    ERROR = enum.auto()
-    """No completion is possible."""
-    UNKNOWN = enum.auto()
-    """No value has been detected yet."""
+    DATA = enum.auto()
 
 
 class Parsed:
@@ -43,6 +30,7 @@ class Parsed:
     method: str
     headers: dict[str, str]
     queries: dict[str, str]
+    data: str
 
     def __init__(self):
         self.path = ""
@@ -50,6 +38,7 @@ class Parsed:
         self.method = ""
         self.headers = {}
         self.queries = {}
+        self.data = ""
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -61,7 +50,8 @@ class Parsed:
             f"path_variables={self.path_variables}, "
             f"method={self.method}, "
             f"headers={self.headers}, "
-            f"queries={self.queries}"
+            f"queries={self.queries}, "
+            f"data={self.data}"
             ")"
         )
 
@@ -88,6 +78,9 @@ class AutoTool:
                     continue
                 if arg == "-Q":
                     section = _Section.QUERY_KEY
+                    continue
+                if arg == "-D":
+                    section = _Section.DATA
                     continue
                 raise ParseError(f"Unexpected {arg}.")
 
@@ -127,6 +120,11 @@ class AutoTool:
                 section = _Section.ARGS
                 continue
 
+            if section == _Section.DATA:
+                result.data = arg
+                section = _Section.ARGS
+                continue
+
             raise ParseError(f"Unexpected {arg}.")
 
         return result
@@ -143,6 +141,7 @@ class AutoTool:
 
         method: dict = path[parsed.method]
 
+        # Verify no invalid header has been passed in
         for k, _ in parsed.headers.items():
             try:
                 [
@@ -154,6 +153,7 @@ class AutoTool:
                 raise ValidationError(
                     f"Method {parsed.method} of path {parsed.path} does not take header {k}."
                 )
+        # Verify no invalid query has been passed in
         for k, _ in parsed.queries.items():
             try:
                 [
@@ -166,13 +166,13 @@ class AutoTool:
                     f"Method {parsed.method} of path {parsed.path} does not take query parameter {k}."
                 )
 
+        # Verify all required parameters have been set
         for parameter in method["parameters"]:
             if parameter["required"] and (
                 (
                     parameter["in"] == "header"
                     and parameter["name"] not in parsed.headers.keys()
-                )
-                or (
+                ) or (
                     parameter["in"] == "query"
                     and parameter["name"] not in parsed.queries.keys()
                 )
@@ -180,6 +180,11 @@ class AutoTool:
                 raise ValidationError(
                     f"Required {parameter['in']} parameter {parameter['name']} is missing."
                 )
+            
+            if parameter["required"] and parameter["in"] == "body" and parsed.data == "":
+                raise ValidationError("No body data have been set.")
+        
+        # TODO Verify the body structure
 
     def complete(self, *args: tuple[str]) -> tuple[str]:
         partial = Parsed()
@@ -200,6 +205,9 @@ class AutoTool:
                     continue
                 if arg == "-Q":
                     section = _Section.QUERY_KEY
+                    continue
+                if arg == "-D":
+                    section = _Section.DATA
                     continue
                 break
 
@@ -234,6 +242,11 @@ class AutoTool:
                 continue
             if section == _Section.QUERY_VALUE:
                 partial.queries[key] = arg
+                section = _Section.ARGS
+                continue
+
+            if section == _Section.DATA:
+                partial.data = arg
                 section = _Section.ARGS
                 continue
 
@@ -372,7 +385,9 @@ class AutoTool:
             # Completion is not available for values
             return tuple()
 
-        if section == _Section.PAYLOAD:
-            raise RuntimeError(f"Unhandled payload completion case: {section=} {partial=} {arg=}")
+        if section == _Section.DATA:
+            # TODO Completion for complex data types?
+            # We could dump the whole thing and let the user fill in the blanks
+            return tuple()
 
         raise RuntimeError(f"Unhandled completion case: {section=} {partial=} {arg=}")
