@@ -14,8 +14,8 @@ class ValidationError(Exception):
 
 
 class _Section(enum.IntFlag):
-    ANY = enum.auto()
     PATH = enum.auto()
+    ARGS = enum.auto()
     METHOD = enum.auto()
     HEADER_KEY = enum.auto()
     HEADER_VALUE = enum.auto()
@@ -77,9 +77,9 @@ class AutoTool:
         section = _Section.PATH
         for arg in args:
             if section == _Section.PATH and arg.startswith("-"):
-                section = _Section.ANY
+                section = _Section.ARGS
 
-            if section == _Section.ANY:
+            if section == _Section.ARGS:
                 if arg == "-X":
                     section = _Section.METHOD
                     continue
@@ -104,25 +104,27 @@ class AutoTool:
                 if result.method:
                     raise ParseError("Method can only be specified once.")
                 result.method = arg.lower()
-                section = _Section.ANY
+                section = _Section.ARGS
                 continue
 
             if section == _Section.HEADER_KEY:
                 key = arg
+                result.headers[key] = ""
                 section = _Section.HEADER_VALUE
                 continue
             if section == _Section.HEADER_VALUE:
                 result.headers[key] = arg
-                section = _Section.ANY
+                section = _Section.ARGS
                 continue
 
             if section == _Section.QUERY_KEY:
                 key = arg
+                result.queries[key] = ""
                 section = _Section.QUERY_VALUE
                 continue
             if section == _Section.QUERY_VALUE:
                 result.queries[key] = arg
-                section = _Section.ANY
+                section = _Section.ARGS
                 continue
 
             raise ParseError(f"Unexpected {arg}.")
@@ -157,7 +159,7 @@ class AutoTool:
                 [
                     p
                     for p in method["parameters"]
-                    if p["name"] == k and p["in"] == "path"
+                    if p["name"] == k and p["in"] == "query"
                 ][0]
             except IndexError:
                 raise ValidationError(
@@ -187,9 +189,9 @@ class AutoTool:
         section: _Section = _Section.PATH
         for arg in args:
             if section == _Section.PATH and arg.startswith("-"):
-                section = _Section.ANY
+                section = _Section.ARGS
 
-            if section == _Section.ANY:
+            if section == _Section.ARGS:
                 if arg == "-X":
                     section = _Section.METHOD
                     continue
@@ -211,33 +213,31 @@ class AutoTool:
                 continue
 
             if section == _Section.METHOD:
-                method = arg
-                section = _Section.ANY
+                partial.method = arg.lower()
+                section = _Section.ARGS
                 continue
 
             if section == _Section.HEADER_KEY:
                 key = arg
+                partial.headers[key] = ""
                 section = _Section.HEADER_VALUE
                 continue
             if section == _Section.HEADER_VALUE:
                 partial.headers[key] = arg
-                section = _Section.ANY
+                section = _Section.ARGS
                 continue
 
             if section == _Section.QUERY_KEY:
                 key = arg
+                partial.queries[key] = ""
                 section = _Section.QUERY_VALUE
                 continue
             if section == _Section.QUERY_VALUE:
                 partial.queries[key] = arg
-                section = _Section.ANY
+                section = _Section.ARGS
                 continue
 
             break
-
-        print(f"{arg=}")
-        print(f"{partial=}")
-        print(f"{section=}")
 
         if section == _Section.PATH:
             current_path: str = "/" + "/".join(args)
@@ -279,4 +279,100 @@ class AutoTool:
                     result.add(word)
                 return tuple(sorted(result))
 
-            raise RuntimeError(f"Unhandled completion case: {section=} {partial=} {arg=}")
+            raise RuntimeError(f"Unhandled path completion case: {section=} {partial=} {arg=}")
+
+        # If the method is incomplete, push the state back
+        if section == _Section.ARGS:
+            methods = list(sorted(self.specification["paths"][partial.path].keys()))
+            if partial.method not in methods:
+                section = _Section.METHOD
+        # If the header key is incomplete, push the state back
+        if section == _Section.HEADER_VALUE:
+            methods = self.specification["paths"][partial.path]
+            if partial.method in methods.keys():
+                parameters = [p for p in methods[partial.method]["parameters"] if p["in"] == "header" and p["name"] not in partial.headers.keys()]
+                if arg in partial.headers.keys() and arg not in parameters:
+                    section = _Section.HEADER_KEY
+        # If the query key is incomplete, push the state back
+        if section == _Section.QUERY_VALUE:
+            methods = self.specification["paths"][partial.path]
+            if partial.method in methods.keys():
+                parameters = [p for p in methods[partial.method]["parameters"] if p["in"] == "query" and p["name"] not in partial.queries.keys()]
+                if arg in partial.headers.keys() and arg not in parameters:
+                    section = _Section.QUERY_KEY
+
+        if section == _Section.ARGS:
+            methods = list(sorted(self.specification["paths"][partial.path].keys()))
+
+            # Until we know the method, we cannot decide which arguments are possible
+            if partial.method == "":
+                # If there is only one possible method, complete it fully
+                if len(methods) == 1:
+                    return (f"-X {methods[0].upper()}")
+                # Otherwise, only suggest a method argument
+                return ("-X",)
+
+            # We know the method, we can detect which types of arguments are possible
+            result = set()
+            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
+                if parameter["in"] == "header" and parameter["name"] not in partial.headers.keys():
+                    incomplete_headers = True
+                    result.add("-H")
+                    continue
+                if parameter["in"] == "path" and parameter["name"] not in partial.queries.keys():
+                    result.add("-Q")
+                    continue
+                # TODO payload
+
+            return tuple(sorted(result))
+
+        if section == _Section.METHOD:
+            methods = self.specification["paths"][partial.path].keys()
+            if partial.method:
+                methods = [m for m in methods if m.startswith(partial.method)]
+            return tuple(sorted(methods))
+
+        if section == _Section.HEADER_KEY:
+            # We cannot complete headers if we don't know the method
+            if not partial.method:
+                return tuple()
+
+            # We don't complete headers which are not recongized
+            for header in partial.headers.keys():
+                if header not in [p for p in self.specification["paths"][partial.path][partial.method]["parameters"] if p["in"] == "header"]:
+                    return tuple()
+
+            missing = set()
+            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
+                if parameter["in"] == "header" and parameter["name"] not in partial.queries.keys():
+                    missing.add(parameter["name"])
+            return tuple(sorted(missing))
+
+        if section == _Section.HEADER_VALUE:
+            # Completion is not available for values
+            return tuple()
+
+        if section == _Section.QUERY_KEY:
+            # We cannot complete headers if we don't know the method
+            if not partial.method:
+                return tuple()
+            
+            # We don't complete queries which are not recongized
+            for header in partial.headers.keys():
+                if header not in [p for p in self.specification["paths"][partial.path][partial.method]["parameters"] if p["in"] == "query"]:
+                    return tuple()
+
+            missing = set()
+            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
+                if parameter["in"] == "query" and parameter["name"] not in partial.queries.keys():
+                    missing.add(parameter["name"])
+            return tuple(sorted(missing))
+
+        if section == _Section.QUERY_VALUE:
+            # Completion is not available for values
+            return tuple()
+
+        if section == _Section.PAYLOAD:
+            raise RuntimeError(f"Unhandled payload completion case: {section=} {partial=} {arg=}")
+
+        raise RuntimeError(f"Unhandled completion case: {section=} {partial=} {arg=}")
