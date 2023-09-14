@@ -1,5 +1,7 @@
 import enum
+import re
 import logging
+from typing import Optional
 
 
 log = logging.getLogger(__file__)
@@ -13,9 +15,11 @@ class ValidationError(Exception):
     pass
 
 
-class _Section(enum.IntFlag):
+class _State(enum.IntFlag):
+    NOT_SET = enum.auto()
     PATH = enum.auto()
     ARGS = enum.auto()
+    FLAG = enum.auto()
     METHOD = enum.auto()
     HEADER_KEY = enum.auto()
     HEADER_VALUE = enum.auto()
@@ -24,7 +28,7 @@ class _Section(enum.IntFlag):
     DATA = enum.auto()
 
 
-class Parsed:
+class Query:
     path: str
     path_variables: dict[str, str]
     method: str
@@ -32,13 +36,25 @@ class Parsed:
     queries: dict[str, str]
     data: str
 
-    def __init__(self):
-        self.path = ""
-        self.path_variables = {}
-        self.method = ""
-        self.headers = {}
-        self.queries = {}
-        self.data = ""
+    _state: _State
+
+    def __init__(
+        self,
+        *,
+        path: Optional[str] = None,
+        path_variables: Optional[dict[str, str]]= None,
+        method: Optional[str] = None,
+        headers: Optional[dict[str, str]] = None,
+        queries: Optional[dict[str, str]] = None,
+        data: Optional[str] = None,
+    ):
+        self.path = path or ""
+        self.path_variables = path_variables or {}
+        self.method = method or ""
+        self.headers = headers or {}
+        self.queries = queries or {}
+        self.data = data or ""
+        self._state = _State.NOT_SET
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -54,37 +70,60 @@ class Parsed:
             f"data={self.data}"
             ")"
         )
+    
+    def __eq__(self, other) -> bool:
+        if type(self) is not type(other):
+            return False
+        other: "Query"
+        if self.path != other.path:
+            return False
+        if self.method != other.method:
+            return False
+        if self.path_variables != other.path_variables:
+            return False
+        if self.headers != other.headers:
+            return False
+        if self.queries != other.queries:
+            return False
+        if self.data != other.data:
+            return False
+        return True
 
 
 class AutoTool:
     def __init__(self, specification: dict):
         self.specification = specification
 
-    def parse(self, *args: tuple[str]) -> Parsed:
-        result = Parsed()
+    def parse(self, args: list[str]) -> Query:
+        result = Query()
 
         key: str = ""
-        section = _Section.PATH
+        state = _State.PATH
         for arg in args:
-            if section == _Section.PATH and arg.startswith("-"):
-                section = _Section.ARGS
+            # Dash starts a split betwen path and arguments
+            if state == _State.PATH and arg.startswith("-"):
+                state = _State.ARGS
 
-            if section == _Section.ARGS:
+            # Descend into specific branch
+            if state == _State.ARGS:
                 if arg == "-X":
-                    section = _Section.METHOD
+                    state = _State.METHOD
                     continue
                 if arg == "-H":
-                    section = _Section.HEADER_KEY
+                    state = _State.HEADER_KEY
                     continue
                 if arg == "-Q":
-                    section = _Section.QUERY_KEY
+                    state = _State.QUERY_KEY
                     continue
                 if arg == "-D":
-                    section = _Section.DATA
+                    state = _State.DATA
                     continue
-                raise ParseError(f"Unexpected {arg}.")
+                
+                # Partial argument, like '-'
+                state = _State.FLAG
+                continue
 
-            if section == _Section.PATH:
+            if state == _State.PATH:
                 if "=" not in arg:
                     result.path += f"/{arg}"
                 else:
@@ -93,301 +132,224 @@ class AutoTool:
                     result.path_variables[key] = value
                 continue
 
-            if section == _Section.METHOD:
-                if result.method:
-                    raise ParseError("Method can only be specified once.")
+            if state == _State.METHOD:
                 result.method = arg.lower()
-                section = _Section.ARGS
+                state = _State.ARGS
                 continue
 
-            if section == _Section.HEADER_KEY:
+            if state == _State.HEADER_KEY:
                 key = arg
                 result.headers[key] = ""
-                section = _Section.HEADER_VALUE
+                state = _State.HEADER_VALUE
                 continue
-            if section == _Section.HEADER_VALUE:
+            if state == _State.HEADER_VALUE:
                 result.headers[key] = arg
-                section = _Section.ARGS
+                state = _State.ARGS
                 continue
 
-            if section == _Section.QUERY_KEY:
+            if state == _State.QUERY_KEY:
                 key = arg
                 result.queries[key] = ""
-                section = _Section.QUERY_VALUE
+                state = _State.QUERY_VALUE
                 continue
-            if section == _Section.QUERY_VALUE:
+            if state == _State.QUERY_VALUE:
                 result.queries[key] = arg
-                section = _Section.ARGS
+                state = _State.ARGS
                 continue
 
-            if section == _Section.DATA:
+            if state == _State.DATA:
                 result.data = arg
-                section = _Section.ARGS
+                state = _State.ARGS
                 continue
 
-            raise ParseError(f"Unexpected {arg}.")
+            if state == _State.FLAG:
+                # TODO WHAT HERE????
+                continue
 
+            raise ParseError(f"Unhandled {arg} ({state.name}).")
+
+        result._state = state
         return result
 
-    def verify(self, parsed: Parsed) -> None:
-        if parsed.path not in self.specification["paths"].keys():
-            raise ValidationError(f"Path {parsed.path} is not valid path.")
+    def verify(self, query: Query) -> None:
+        if query.path not in self.specification["paths"].keys():
+            raise ValidationError(f"Path '{query.path}' is not valid.")
 
-        path: dict = self.specification["paths"][parsed.path]
-        if parsed.method not in path.keys():
-            raise ValidationError(
-                f"Path {parsed.path} does not define method {parsed.method}."
-            )
+        for path_variable, value in query.path_variables.items():
+            if not value:
+                raise ValidationError(f"Path variable '{path_variable}' has not been set.")
 
-        method: dict = path[parsed.method]
-
-        # Verify no invalid header has been passed in
-        for k, _ in parsed.headers.items():
-            try:
-                [
-                    p
-                    for p in method["parameters"]
-                    if p["name"] == k and p["in"] == "header"
-                ][0]
-            except IndexError:
-                raise ValidationError(
-                    f"Method {parsed.method} of path {parsed.path} does not take header {k}."
-                )
-        # Verify no invalid query has been passed in
-        for k, _ in parsed.queries.items():
-            try:
-                [
-                    p
-                    for p in method["parameters"]
-                    if p["name"] == k and p["in"] == "query"
-                ][0]
-            except IndexError:
-                raise ValidationError(
-                    f"Method {parsed.method} of path {parsed.path} does not take query parameter {k}."
-                )
-
-        # Verify all required parameters have been set
-        for parameter in method["parameters"]:
-            if parameter["required"] and (
-                (
-                    parameter["in"] == "header"
-                    and parameter["name"] not in parsed.headers.keys()
-                ) or (
-                    parameter["in"] == "query"
-                    and parameter["name"] not in parsed.queries.keys()
-                )
-            ):
-                raise ValidationError(
-                    f"Required {parameter['in']} parameter {parameter['name']} is missing."
-                )
-            
-            if parameter["required"] and parameter["in"] == "body" and parsed.data == "":
-                raise ValidationError("No body data have been set.")
+        if not query.method:
+            raise ValidationError("Method has not been set.")
         
+        methods = self.specification["paths"][query.path].keys()
+        if query.method not in methods:
+            raise ValidationError(f"Method '{query.method}' is not supported.")
+
+        parameters = self.specification["paths"][query.path][query.method]["parameters"]
+        for param in [p for p in parameters if p["in"] == "header"]:
+            if param["required"] and param["name"] not in query.headers.keys():
+                raise ValidationError(f"Header '{param['name']}' has not been set.")
+        for param in [p for p in parameters if p["in"] == "query"]:
+            if param["required"] and param["name"] not in query.queries.keys():
+                raise ValidationError(f"Query '{param['name']}' has not been set.")
+
+        if any([p for p in parameters if p["in"] == "body"]) and not query.data:
+            raise ValidationError("Data has not been set.")
+
         # TODO Verify the body structure
 
-    def complete(self, *args: tuple[str]) -> tuple[str]:
-        partial = Parsed()
+    def complete(self, args: list[str]) -> tuple[str]:
+        query: Query = self.parse(args)
 
-        arg: str = ""
-        key: str = ""
-        section: _Section = _Section.PATH
-        for arg in args:
-            if section == _Section.PATH and arg.startswith("-"):
-                section = _Section.ARGS
+        if query._state == _State.PATH:
+            # If the path is completely empty, ensure we have at least root
+            if not query.path:
+                query.path = "/"
 
-            if section == _Section.ARGS:
-                if arg == "-X":
-                    section = _Section.METHOD
-                    continue
-                if arg == "-H":
-                    section = _Section.HEADER_KEY
-                    continue
-                if arg == "-Q":
-                    section = _Section.QUERY_KEY
-                    continue
-                if arg == "-D":
-                    section = _Section.DATA
-                    continue
-                break
+            # If the parsed path contains filled in path variables, put them back
+            for k, v in query.path_variables.items():
+                query.path = query.path.replace(f"{{{k}}}", f"{k}={v}")
 
-            if section == _Section.PATH:
-                if "=" not in arg:
-                    partial.path += f"/{arg}"
-                else:
-                    key, value = arg.split("=", 1)
-                    partial.path += f"/{{{key}}}"
-                    partial.path_variables[key] = value
-                continue
+            path_stub: str = query.path.split("/")[-1]
 
-            if section == _Section.METHOD:
-                partial.method = arg.lower()
-                section = _Section.ARGS
-                continue
-
-            if section == _Section.HEADER_KEY:
-                key = arg
-                partial.headers[key] = ""
-                section = _Section.HEADER_VALUE
-                continue
-            if section == _Section.HEADER_VALUE:
-                partial.headers[key] = arg
-                section = _Section.ARGS
-                continue
-
-            if section == _Section.QUERY_KEY:
-                key = arg
-                partial.queries[key] = ""
-                section = _Section.QUERY_VALUE
-                continue
-            if section == _Section.QUERY_VALUE:
-                partial.queries[key] = arg
-                section = _Section.ARGS
-                continue
-
-            if section == _Section.DATA:
-                partial.data = arg
-                section = _Section.ARGS
-                continue
-
-            break
-
-        if section == _Section.PATH:
-            current_path: str = "/" + "/".join(args)
+            # Remove potentially incomplete path stub
+            query.path = query.path.removesuffix(path_stub)
 
             # Find all paths matching the written one
-            path_continuations = [
-                path
-                for path
-                in self.specification["paths"].keys()
-                if path.startswith(partial.path)
-            ]
-            # Remove common prefix that has already been written
-            cut_path_continuations = [
-                path.removeprefix(current_path)
-                for path
-                in path_continuations
-            ]
+            paths: set[str] = set()
+            for path in self.specification["paths"].keys():
 
-            # Find out if we can continue with the same word or with more words
-            same_words = []
-            next_words = []
-            for continuation in cut_path_continuations:
-                if continuation.startswith("/"):
-                    next_words.append(continuation.removeprefix("/"))
-                else:
-                    same_words.append(continuation)
+                # If the parsed path contains filled in path variables, put them in
+                for k, v in query.path_variables.items():
+                    old = f"{{{k}}}"
+                    new = f"{k}={v}"
+                    path = path.replace(old, new)
 
-            # We can continue in a word
-            if same_words:
-                return tuple(sorted(set([arg + word.split("/", 1)[0] for word in same_words])))
-            
-            # There are more words that can be completed
-            if next_words:
-                result = set()
-                for word in next_words:
-                    word = word.split("/", 1)[0]
-                    if word.startswith("{") and word.endswith("}"):
-                        word = word[1:-1] + "="
-                    result.add(word)
-                return tuple(sorted(result))
+                # For compeltion reasons, replace variables in paths
+                #  - /dns/{domain}/a
+                #  + /dns/domain=/a
+                if "{" in path:
+                    path = re.sub(
+                        r"(?P<prefix>.*)\{(?P<domain>[a-zA-Z0-9]+)\}(?P<suffix>.*)",
+                        r"\g<prefix>\g<domain>=\g<suffix>",
+                        path,
+                    )
+                    # If the parsed path contains filled in path variables, put them back
+                    for k, v in query.path_variables.items():
+                        path = path.replace(f"{k=}", f"{k}={v}")
 
-            raise RuntimeError(f"Unhandled path completion case: {section=} {partial=} {arg=}")
+                # Skip paths that do not match what has been written already
+                if not path.startswith(query.path + path_stub):
+                    continue
+
+                # Remove the part of the path that is completely written out
+                path = path.removeprefix(query.path)
+
+                # Only include direct children of the current path node
+                path = path.split("/", 1)[0]
+
+                paths.add(path)
+
+            # Full path has been completed
+            if not len(paths) or tuple(paths)[0] == "":
+                return tuple()
+
+            # There are children or partial children available
+            if len(paths):
+                return tuple(sorted(paths))
 
         # If the method is incomplete, push the state back
-        if section == _Section.ARGS:
-            methods = list(sorted(self.specification["paths"][partial.path].keys()))
-            if partial.method not in methods:
-                section = _Section.METHOD
-        # If the header key is incomplete, push the state back
-        if section == _Section.HEADER_VALUE:
-            methods = self.specification["paths"][partial.path]
-            if partial.method in methods.keys():
-                parameters = [p for p in methods[partial.method]["parameters"] if p["in"] == "header" and p["name"] not in partial.headers.keys()]
-                if arg in partial.headers.keys() and arg not in parameters:
-                    section = _Section.HEADER_KEY
-        # If the query key is incomplete, push the state back
-        if section == _Section.QUERY_VALUE:
-            methods = self.specification["paths"][partial.path]
-            if partial.method in methods.keys():
-                parameters = [p for p in methods[partial.method]["parameters"] if p["in"] == "query" and p["name"] not in partial.queries.keys()]
-                if arg in partial.headers.keys() and arg not in parameters:
-                    section = _Section.QUERY_KEY
+        if query._state == _State.ARGS:
+            if query.method not in self.specification["paths"][query.path].keys():
+                query._state = _State.METHOD
 
-        if section == _Section.ARGS:
-            methods = list(sorted(self.specification["paths"][partial.path].keys()))
+        if query._state == _State.FLAG:
+            if not query.method:
+                return ("-X", )
+            flags = set(("-H", "-Q"))
+            if not query.data:  # TODO And if the endpoint can actually send them
+                flags.add("-D")
+            return tuple(sorted(flags))
 
+        # If the header key is not complete, push the state back
+        if query._state == _State.HEADER_VALUE:
+            methods = self.specification["paths"][query.path]
+            # Only move around if we know the method
+            if query.method in methods.keys():
+                params = [p["name"] for p in methods[query.method]["parameters"] if p["in"] == "header"]
+                for key in query.headers.keys():
+                    if key not in params:
+                        # The header key is likely not complete yet
+                        query._state = _State.HEADER_KEY
+
+        # If the query key is not complete, push the state back
+        if query._state == _State.QUERY_VALUE:
+            methods = self.specification["paths"][query.path]
+            # Only move around if we know the method
+            if query.method in methods.keys():
+                params = [p["name"] for p in methods[query.method]["parameters"] if p["in"] == "query"]
+                for key in query.headers.keys():
+                    if key not in params:
+                        # The query key is likely not complete yet
+                        query._state = _State.QUERY_KEY
+
+        if query._state == _State.ARGS:
             # Until we know the method, we cannot decide which arguments are possible
-            if partial.method == "":
-                # If there is only one possible method, complete it fully
-                if len(methods) == 1:
-                    return (f"-X {methods[0].upper()}")
-                # Otherwise, only suggest a method argument
-                return ("-X",)
+            if not query.method:
+                return ("-X", )
 
-            # We know the method, we can detect which types of arguments are possible
-            result = set()
-            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
-                if parameter["in"] == "header" and parameter["name"] not in partial.headers.keys():
-                    incomplete_headers = True
-                    result.add("-H")
+            # Suggest flags that are not yet filled in
+            flags = set()
+            for parameter in self.specification["paths"][query.path][query.method]["parameters"]:
+                if parameter["in"] == "header" and parameter["name"] not in query.headers.keys():
+                    flags.add("-H")
                     continue
-                if parameter["in"] == "path" and parameter["name"] not in partial.queries.keys():
-                    result.add("-Q")
+                if parameter["in"] == "path" and parameter["name"] not in query.queries.keys():
+                    flags.add("-Q")
                     continue
-                # TODO payload
+                if parameter["in"] == "body" and not query.data:
+                    flags.add("-D")
+                    continue
+            
+            return tuple(sorted(flags))
 
-            return tuple(sorted(result))
-
-        if section == _Section.METHOD:
-            methods = self.specification["paths"][partial.path].keys()
-            if partial.method:
-                methods = [m for m in methods if m.startswith(partial.method)]
+        if query._state == _State.METHOD:
+            methods = self.specification["paths"][query.path].keys()
+            if query.method:
+                methods = [m for m in methods if m.startswith(query.method)]
             return tuple(sorted(methods))
 
-        if section == _Section.HEADER_KEY:
-            # We cannot complete headers if we don't know the method
-            if not partial.method:
+        if query._state == _State.HEADER_KEY:
+            # We cannot complete header keys if we don't know the method
+            if not query.method:
                 return tuple()
 
-            # We don't complete headers which are not recongized
-            for header in partial.headers.keys():
-                if header not in [p for p in self.specification["paths"][partial.path][partial.method]["parameters"] if p["in"] == "header"]:
-                    return tuple()
+            keys = [
+                p["name"]
+                for p
+                in self.specification["paths"][query.path][query.method]["parameters"]
+                if p["in"] == "header" and p["name"] not in query.headers.keys()
+            ]
+            return tuple(sorted(keys))
 
-            missing = set()
-            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
-                if parameter["in"] == "header" and parameter["name"] not in partial.queries.keys():
-                    missing.add(parameter["name"])
-            return tuple(sorted(missing))
 
-        if section == _Section.HEADER_VALUE:
-            # Completion is not available for values
-            return tuple()
-
-        if section == _Section.QUERY_KEY:
-            # We cannot complete headers if we don't know the method
-            if not partial.method:
+        if query._state == _State.QUERY_KEY:
+            # We cannot complete query keys if we don't know the method
+            if not query.method:
                 return tuple()
-            
-            # We don't complete queries which are not recongized
-            for header in partial.headers.keys():
-                if header not in [p for p in self.specification["paths"][partial.path][partial.method]["parameters"] if p["in"] == "query"]:
-                    return tuple()
 
-            missing = set()
-            for parameter in self.specification["paths"][partial.path][partial.method]["parameters"]:
-                if parameter["in"] == "query" and parameter["name"] not in partial.queries.keys():
-                    missing.add(parameter["name"])
-            return tuple(sorted(missing))
-
-        if section == _Section.QUERY_VALUE:
-            # Completion is not available for values
+            keys = [
+                p["name"]
+                for p
+                in self.specification["paths"][query.path][query.method]["parameters"]
+                if p["in"] == "query" and p["name"] not in query.queries.keys()
+            ]
+            return tuple(sorted(keys))
+        
+        if query._state in (_State.HEADER_VALUE, _State.QUERY_VALUE, _State.DATA):
             return tuple()
 
-        if section == _Section.DATA:
-            # TODO Completion for complex data types?
-            # We could dump the whole thing and let the user fill in the blanks
-            return tuple()
+        # TODO Completion for complex data types
 
-        raise RuntimeError(f"Unhandled completion case: {section=} {partial=} {arg=}")
+        raise RuntimeError(f"Unhandled completion case: {query=} {query._state=}")

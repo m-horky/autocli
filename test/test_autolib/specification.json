@@ -1,0 +1,228 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "title": "REST API Documentation"
+    },
+    "host": "api.example.org",
+    "basePath": "/",
+    "tags": [
+        {
+            "name": "DNS",
+            "description": "Operations with DNS records"
+        },
+        {
+            "name": "Domains",
+            "description": "Operations on .domains"
+        }
+    ],
+    "paths": {
+        "/dns/domains": {
+            "get": {
+                "tags": ["DNS"],
+                "summary": "Returns a list of domains.",
+                "operationId": "getDnsDomainsUsingGET",
+                "produces": ["application/json"],
+                "parameters": [
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization Token",
+                        "required": true,
+                        "type": "string",
+                        "default": "Bearer <Auth Token>"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "401": {"description": "TOKEN_INVALID"},
+                    "403": {"description": "UNAUTHORIZED"},
+                    "429": {"description": "TOO_MANY_REQUESTS"},
+                    "500": {"description": "SYSTEM_ERROR"}
+                },
+                "deprecated": false
+            }
+        },
+        "/dns/{domain}/a": {
+            "post": {
+                "tags": ["DNS"],
+                "summary": "Create a new A record.",
+                "operationId": "addNewARecordUsingPOST",
+                "consumes": ["application/json"],
+                "produces": ["*/*"],
+                "parameters": [
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization Token",
+                        "required": true,
+                        "type": "string",
+                        "default": "Bearer <Auth Token>"
+                    },
+                    {
+                        "name": "domain",
+                        "in": "path",
+                        "description": "Domain name",
+                        "required": true,
+                        "type": "string"
+                    },
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "description": "3rd level of the domain name",
+                        "required": true,
+                        "type": "string"
+                    },
+                    {
+                        "name": "name2",
+                        "in": "query",
+                        "description": "3rd level of the domain name (optional)",
+                        "required": false,
+                        "type": "string"
+                    },
+                    {
+                        "in": "body",
+                        "name": "newDnsRecord",
+                        "description": "newDnsRecord",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/DnsRecordACreate"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {"description": "OK"},
+                    "401": {"description": "TOKEN_INVALID"},
+                    "403": {"description": "UNAUTHORIZED"},
+                    "429": {"description": "TOO_MANY_REQUESTS"},
+                    "500": {"description": "SYSTEM_ERROR"}
+                },
+                "deprecated": false
+            },
+            "put": {
+                "tags": ["DNS"],
+                "summary": "Updates an existing A record.",
+                "operationId": "updateARecordUsingPUT",
+                "consumes": ["application/json"],
+                "produces": ["*/*"],
+                "parameters": [
+                    {
+                        "name": "Authorization",
+                        "in": "header",
+                        "description": "Authorization Token",
+                        "required": true,
+                        "type": "string",
+                        "default": "Bearer <Auth Token>"
+                    },
+                    {
+                        "in": "body",
+                        "name": "dnsRecord",
+                        "description": "dnsRecord",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/DnsRecordAUpdate"
+                        }
+                    },
+                    {
+                        "name": "domain",
+                        "in": "path",
+                        "description": "Domain name",
+                        "required": true,
+                        "type": "string"
+                    },
+                    {
+                        "name": "name",
+                        "in": "query",
+                        "description": "3rd level of the domain name",
+                        "required": false,
+                        "type": "string"
+                    }
+                ],
+                "responses": {
+                    "204": {"description": "OK"},
+                    "400": {"description": "DNS_RECORD_TO_UPDATE_NOT_FOUND"},
+                    "401": {"description": "TOKEN_INVALID"},
+                    "403": {"description": "UNAUTHORIZED"},
+                    "429": {"description": "TOO_MANY_REQUESTS"},
+                    "500": {"description": "SYSTEM_ERROR"}
+                },
+                "deprecated": false
+            }
+        },
+        "/status": {
+            "get": {
+                "tags": [],
+                "summary": "Obtain server status.",
+                "operationId": "status",
+                "consumes": ["application/json"],
+                "produces": ["**/**"],
+                "parameters": [],
+                "responses": {
+                    "200": {"description": "OK"}
+                },
+                "deprecated": false
+            }
+        }
+    },
+    "definitions": {
+        "DnsRecord": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the record."
+                },
+                "ttl": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "Time to live."
+                }
+            },
+            "title": "DnsRecord",
+            "description": "Basic DNS Record."
+        },
+        "DnsRecordACreate": {
+            "type": "object",
+            "properties": {
+                "ip": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name of the record."
+                },
+                "ttl": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "Time to live."
+                }
+            },
+            "title": "DnsRecordACreate",
+            "description": "Basic DNS Record."
+        },
+        "DnsRecordAUpdate": {
+            "type": "object",
+            "properties": {
+                "hashId": {
+                    "type": "string"
+                },
+                "ip": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Name of the record."
+                },
+                "ttl": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "Time to live."
+                }
+            },
+            "title": "DnsRecordAUpdate",
+            "description": "Basic DNS Record."
+        }
+    }
+}
