@@ -20,7 +20,7 @@ $ python3 -m pip install -e .
 ## Usage
 
 ```shell
-$ autocli example-cli https://example.org/api/swagger-1.2.7.json
+$ autocli example-cli https://example.org/api/swagger-1.2.7.json https://example.org/api
 ...
 You have pipx available. The easiest way to install the package is:
 > pipx install /home/mhorky/src/autocli/build/example-cli
