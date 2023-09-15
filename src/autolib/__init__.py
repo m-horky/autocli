@@ -273,7 +273,8 @@ class AutoTool:
 
             # Full path has been completed
             if not len(paths) or (len(paths) == 1 and tuple(paths)[0] == ""):
-                return tuple()
+                query._state = _State.FLAG
+                query.path = query.path.removesuffix("/")
 
             # There are children or partial children available
             if len(paths):
