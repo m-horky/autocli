@@ -27,7 +27,7 @@ test = [
 ]
 
 [project.scripts]
-autocli = "autocli.cli:main"
+autocli = "autocli:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "autocli.__about__.VERSION"}
