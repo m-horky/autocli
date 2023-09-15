@@ -23,6 +23,7 @@ class CLIGenerator:
 
     name: str
     specification_url: str
+    api_url: str
     package: str
 
     def __init__(self, args: Optional[argparse.Namespace] = None):
@@ -32,6 +33,7 @@ class CLIGenerator:
 
         self.name: str = args.name
         self.specification_url: str = args.specification
+        self.api_url: str = args.address
         self.package = self.name.replace("-", "_")
 
         self._build_dir: pathlib.Path = (
@@ -61,6 +63,10 @@ class CLIGenerator:
         parser.add_argument(
             "specification",
             help="URL pointing to the JSON OpenAPI specification",
+        )
+        parser.add_argument(
+            "address",
+            help="URL pointing to the API itself",
         )
         parser.add_argument(
             "--build-dir",
@@ -103,8 +109,8 @@ class CLIGenerator:
                 "import sys",
                 "import logging",
                 "",
-                "import autolib",
                 f"import {self.package}.__about__",
+                f"from {self.package} import autolib",
                 "",
                 "",
                 f"TOOL = autolib.AutoTool({self.package}.__about__.SPECIFICATION)",
@@ -121,8 +127,8 @@ class CLIGenerator:
                 '        format="%(asctime)s %(levelname)8s "',
                 '        "%(module)s:%(funcName)s:%(lineno)s | %(message)s",',
                 '    )',
-                '    log = logging.getLogger(__file__)',
-                '    print("running main")',
+                f'    TOOL.run({self.package}.__about__.API_URL, sys.argv[1:])',
+                "",
             ]))
 
     def _generate_about_py(self):
@@ -133,6 +139,7 @@ class CLIGenerator:
                     # TODO Include the API version in the field
                     "VERSION = '0.0.0+0.0.0'\n",
                     f"SPECIFICATION_URL = '{self.specification_url}'\n"
+                    f"API_URL = '{self.api_url}'\n"
                     f"SPECIFICATION = {self.specification!s}\n",
                 ]
             )
@@ -152,6 +159,7 @@ class CLIGenerator:
                 "license = { text = 'MIT' }",
                 "dynamic = ['version']",
                 "dependencies = [",
+                "    'requests',",
                 "]",
                 "requires-python = '>=3.9'",
                 "",

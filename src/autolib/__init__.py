@@ -1,7 +1,10 @@
 import enum
 import re
+import sys
 import logging
 from typing import Optional
+
+import requests
 
 
 log = logging.getLogger(__file__)
@@ -70,7 +73,7 @@ class Query:
             f"data={self.data}"
             ")"
         )
-    
+
     def __eq__(self, other) -> bool:
         if type(self) is not type(other):
             return False
@@ -203,7 +206,7 @@ class AutoTool:
 
         if not query.method:
             raise ValidationError("Method has not been set.")
-        
+
         methods = self.specification["paths"][query.path].keys()
         if query.method not in methods:
             raise ValidationError(f"Method '{query.method}' is not supported.")
@@ -370,3 +373,37 @@ class AutoTool:
         # TODO Completion for complex data types
 
         raise RuntimeError(f"Unhandled completion case: {query=} {query._state=}")
+
+    def run(self, api_url: str, args: list[str]):
+        query: Query = self.parse(args)
+
+        fn: callable = getattr(requests, query.method)
+
+        path = query.path
+        for k, v in query.path_variables.items():
+            path = path.replace(f"{{{k}}}", v)
+        url = api_url + path
+
+        log.info(f"making a '{query.method}' request to '{url}'")
+        if query.headers:
+            log.debug(f"headers={query.headers}")
+        if query.queries:
+            log.debug(f"queries={query.queries}")
+        if query.data:
+            log.debug(f"data={query.data}")
+        response: requests.Response = fn(url, headers=query.headers, params=query.queries, data=query.data, timeout=10.0)
+
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            log.error(f"got status code {response.status_code}: {exc}")
+            sys.exit(1)
+
+        log.debug(f"got status code {response.status_code}")
+
+        try:
+            result = response.json()
+        except Exception:
+            result = response.content
+
+        print(result)
