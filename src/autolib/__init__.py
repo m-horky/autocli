@@ -241,7 +241,6 @@ class AutoTool:
             # Find all paths matching the written one
             paths: set[str] = set()
             for path in self.specification["paths"].keys():
-
                 # If the parsed path contains filled in path variables, put them in
                 for k, v in query.path_variables.items():
                     old = f"{{{k}}}"
@@ -251,7 +250,7 @@ class AutoTool:
                 # For compeltion reasons, replace variables in paths
                 #  - /dns/{domain}/a
                 #  + /dns/domain=/a
-                if "{" in path:
+                while "{" in path:
                     path = re.sub(
                         r"(?P<prefix>.*)\{(?P<domain>[a-zA-Z0-9]+)\}(?P<suffix>.*)",
                         r"\g<prefix>\g<domain>=\g<suffix>",
@@ -289,10 +288,7 @@ class AutoTool:
         if query._state == _State.FLAG:
             if not query.method:
                 return ("-X", )
-            flags = set(("-H", "-Q"))
-            if not query.data:  # TODO And if the endpoint can actually send them
-                flags.add("-D")
-            return tuple(sorted(flags))
+            query._state = _State.ARGS
 
         # If the header key is not complete, push the state back
         if query._state == _State.HEADER_VALUE:
@@ -316,7 +312,7 @@ class AutoTool:
                         # The query key is likely not complete yet
                         query._state = _State.QUERY_KEY
 
-        if query._state == _State.ARGS:
+        if query._state == _State.ARGS or query._state == _State.FLAG:
             # Until we know the method, we cannot decide which arguments are possible
             if not query.method:
                 return ("-X", )
@@ -327,7 +323,7 @@ class AutoTool:
                 if parameter["in"] == "header" and parameter["name"] not in query.headers.keys():
                     flags.add("-H")
                     continue
-                if parameter["in"] == "path" and parameter["name"] not in query.queries.keys():
+                if parameter["in"] == "query" and parameter["name"] not in query.queries.keys():
                     flags.add("-Q")
                     continue
                 if parameter["in"] == "body" and not query.data:
@@ -355,7 +351,6 @@ class AutoTool:
             ]
             return tuple(sorted(keys))
 
-
         if query._state == _State.QUERY_KEY:
             # We cannot complete query keys if we don't know the method
             if not query.method:
@@ -368,7 +363,7 @@ class AutoTool:
                 if p["in"] == "query" and p["name"] not in query.queries.keys()
             ]
             return tuple(sorted(keys))
-        
+
         if query._state in (_State.HEADER_VALUE, _State.QUERY_VALUE, _State.DATA):
             return tuple()
 

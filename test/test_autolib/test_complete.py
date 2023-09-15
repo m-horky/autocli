@@ -72,6 +72,12 @@ class TestHeader:
         actual = AT.complete(["dns", "domains", "-X", "GET", "-H"])
         assert expected == actual
     
+    def test_valud_not_suggested(self):
+        expected = tuple()
+        actual = AT.complete(["dns", "domains", "-X", "GET", "-H", "Authorization", ""])
+        assert expected == actual
+        assert False
+    
 
 class TestQuery:
     def test_no_method_specified(self):
