@@ -93,13 +93,35 @@ class Query:
 class AutoTool:
     def __init__(self, specification: dict):
         self.specification = specification
+    
+    def _fix_args(self, args: list[str]) -> list[str]:
+        """Fix the input.
+        
+        Bash `complete` (via `readline`) is splitting the input on `=`, making
+        it unusable for the grammar written below.
+
+        This function takes in the input from `sys.argv` and joins back items
+        that were separated into `foo`, `=`, `bar` triplets.
+        """
+        fixed_args: list[str] = []
+        join_next: bool = False
+        for arg in args:
+            if join_next:
+                fixed_args[-1] = fixed_args[-1] + "=" + arg
+                join_next = False
+                continue
+            if arg != "=":
+                fixed_args.append(arg)
+                continue
+            join_next = True
+        return fixed_args
 
     def parse(self, args: list[str]) -> Query:
         result = Query()
 
         key: str = ""
         state = _State.PATH
-        for arg in args:
+        for arg in self._fix_args(args):
             # Dash starts a split betwen path and arguments
             if state == _State.PATH and arg.startswith("-"):
                 state = _State.ARGS
