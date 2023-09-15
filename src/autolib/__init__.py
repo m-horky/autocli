@@ -238,7 +238,10 @@ class AutoTool:
             # Remove potentially incomplete path stub
             query.path = query.path.removesuffix(path_stub)
 
+            sub = re.compile(r"\{(?P<domain>[\w]+)\}")
+
             # Find all paths matching the written one
+            path: str
             paths: set[str] = set()
             for path in self.specification["paths"].keys():
                 # If the parsed path contains filled in path variables, put them in
@@ -251,11 +254,7 @@ class AutoTool:
                 #  - /dns/{domain}/a
                 #  + /dns/domain=/a
                 while "{" in path:
-                    path = re.sub(
-                        r"(?P<prefix>.*)\{(?P<domain>[a-zA-Z0-9]+)\}(?P<suffix>.*)",
-                        r"\g<prefix>\g<domain>=\g<suffix>",
-                        path,
-                    )
+                    path = re.sub(sub, r"\g<domain>=", path)
                     # If the parsed path contains filled in path variables, put them back
                     for k, v in query.path_variables.items():
                         path = path.replace(f"{k=}", f"{k}={v}")
@@ -273,7 +272,7 @@ class AutoTool:
                 paths.add(path)
 
             # Full path has been completed
-            if not len(paths) or tuple(paths)[0] == "":
+            if not len(paths) or (len(paths) == 1 and tuple(paths)[0] == ""):
                 return tuple()
 
             # There are children or partial children available
@@ -296,8 +295,8 @@ class AutoTool:
             # Only move around if we know the method
             if query.method in methods.keys():
                 params = [p["name"] for p in methods[query.method]["parameters"] if p["in"] == "header"]
-                for key in query.headers.keys():
-                    if key not in params:
+                for key in params:
+                    if key not in query.headers.keys():
                         # The header key is likely not complete yet
                         query._state = _State.HEADER_KEY
 
@@ -307,8 +306,8 @@ class AutoTool:
             # Only move around if we know the method
             if query.method in methods.keys():
                 params = [p["name"] for p in methods[query.method]["parameters"] if p["in"] == "query"]
-                for key in query.headers.keys():
-                    if key not in params:
+                for key in params:
+                    if key not in query.headers.keys():
                         # The query key is likely not complete yet
                         query._state = _State.QUERY_KEY
 
