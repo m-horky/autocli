@@ -241,7 +241,7 @@ class AutoTool:
             # Remove potentially incomplete path stub
             query.path = query.path.removesuffix(path_stub)
 
-            sub = re.compile(r"\{(?P<domain>[\w]+)\}")
+            sub = re.compile(r"\{(?P<domain>[\w-]+)\}")
 
             # Find all paths matching the written one
             path: str
